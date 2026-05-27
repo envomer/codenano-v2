@@ -13,7 +13,7 @@ import type {
   TextBlockParam,
   ToolUseBlockParam,
 } from '@anthropic-ai/sdk/resources/messages.js'
-import { zodToJsonSchema } from 'zod-to-json-schema'
+import { z } from 'zod'
 import type { ToolDef, AgentConfig, Usage } from './types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -93,8 +93,8 @@ export function toolDefsToAPISchemas(tools: ToolDef[]): Anthropic.Messages.Tool[
   return tools.map(tool => ({
     name: tool.name,
     description: tool.description,
-    input_schema: zodToJsonSchema(tool.input, {
-      $refStrategy: 'none',
+    input_schema: z.toJSONSchema(tool.input, {
+      target: 'draft-07',
     }) as Anthropic.Messages.Tool['input_schema'],
   }))
 }
