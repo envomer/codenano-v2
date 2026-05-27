@@ -6,8 +6,8 @@
 
 import { z } from 'zod'
 import fs from 'fs'
-import path from 'path'
 import { defineTool } from '../tool-builder.js'
+import { resolveToolPath } from '../cwd.js'
 
 const inputSchema = z.object({
   file_path: z.string().describe('The absolute path to the file to read'),
@@ -37,8 +37,8 @@ export const FileReadTool = defineTool({
   isReadOnly: true,
   isConcurrencySafe: true,
 
-  async execute(input) {
-    const filePath = path.resolve(input.file_path)
+  async execute(input, context) {
+    const filePath = resolveToolPath(input.file_path, context.cwd)
 
     if (!fs.existsSync(filePath)) {
       return { content: `Error: File not found: ${filePath}`, isError: true }

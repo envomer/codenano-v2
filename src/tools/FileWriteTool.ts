@@ -8,6 +8,7 @@ import { z } from 'zod'
 import fs from 'fs'
 import path from 'path'
 import { defineTool } from '../tool-builder.js'
+import { resolveToolPath } from '../cwd.js'
 
 const inputSchema = z.object({
   file_path: z
@@ -24,8 +25,8 @@ export const FileWriteTool = defineTool({
     'Writes a file to the local filesystem. This tool will overwrite the existing file if there is one at the provided path.',
   input: inputSchema,
 
-  async execute(input) {
-    const filePath = path.resolve(input.file_path)
+  async execute(input, context) {
+    const filePath = resolveToolPath(input.file_path, context.cwd)
 
     // Ensure parent directory exists
     const dir = path.dirname(filePath)

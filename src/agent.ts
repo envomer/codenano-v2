@@ -48,7 +48,7 @@ import {
   type ModelCallResult,
 } from './provider.js'
 import { toPublicEvent } from './events.js'
-import { buildSystemPrompt, buildEffectiveSystemPrompt, detectEnvironment } from './prompt/index.js'
+import { buildSystemPrompt, buildEffectiveSystemPrompt, detectEnvironment, getEnvironmentSection } from './prompt/index.js'
 import { shouldAutoCompact, compactMessages, isPromptTooLongError } from './compact.js'
 import { loadInstructions } from './instructions.js'
 import { applyMessageBudget } from './tool-budget.js'
@@ -91,6 +91,7 @@ const MAX_OUTPUT_RECOVERY_MESSAGE =
 export function createAgent(config: AgentConfig): Agent {
   const resolvedConfig: AgentConfig = {
     ...config,
+    cwd: config.cwd ? resolveAgentCwd(config) : undefined,
     model: config.model ?? DEFAULT_MODEL,
     maxTurns: config.maxTurns ?? DEFAULT_MAX_TURNS,
     tools: config.tools ?? [],
@@ -169,6 +170,11 @@ class AgentImpl implements Agent {
     })
 
     let prompt = [...effective].filter(Boolean).join('\n\n')
+
+    // Environment survives custom/override prompts (same pattern as memory)
+    if (this.config.overrideSystemPrompt || this.config.systemPrompt) {
+      prompt = prompt + '\n\n' + getEnvironmentSection(this.config.model, detectEnvironment(cwd))
+    }
 
     // Auto-load CLAUDE.md project instructions if enabled
     if (this.config.autoLoadInstructions) {

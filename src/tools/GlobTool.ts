@@ -6,8 +6,8 @@
 
 import { z } from 'zod'
 import { execSync } from 'child_process'
-import path from 'path'
 import { defineTool } from '../tool-builder.js'
+import { resolveToolPath } from '../cwd.js'
 
 const inputSchema = z.object({
   pattern: z.string().describe('The glob pattern to match files against'),
@@ -30,7 +30,8 @@ export const GlobTool = defineTool({
   isConcurrencySafe: true,
 
   async execute(input, context) {
-    const searchDir = input.path ? path.resolve(input.path) : (context.cwd ?? process.cwd())
+    const baseCwd = context.cwd ?? process.cwd()
+    const searchDir = input.path ? resolveToolPath(input.path, baseCwd) : baseCwd
 
     try {
       // Use find with globbing — cross-platform fallback

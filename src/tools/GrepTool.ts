@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { execSync } from 'child_process'
 import path from 'path'
 import { defineTool } from '../tool-builder.js'
+import { resolveToolPath } from '../cwd.js'
 
 const inputSchema = z.object({
   pattern: z.string().describe('The regular expression pattern to search for in file contents'),
@@ -51,7 +52,8 @@ export const GrepTool = defineTool({
   isConcurrencySafe: true,
 
   async execute(input, context) {
-    const searchPath = input.path ? path.resolve(input.path) : (context.cwd ?? process.cwd())
+    const baseCwd = context.cwd ?? process.cwd()
+    const searchPath = input.path ? resolveToolPath(input.path, baseCwd) : baseCwd
     const mode = input.output_mode ?? 'files_with_matches'
     const limit = input.head_limit ?? 250
 

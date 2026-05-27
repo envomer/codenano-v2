@@ -18,6 +18,9 @@ import { getGitState } from '../../git.js'
 export function getEnvironmentSection(model: string, env?: EnvironmentInfo): string {
   const rawItems: (string | string[] | null)[] = [
     env?.cwd ? `Primary working directory: ${env.cwd}` : null,
+    env?.cwd
+      ? `Resolve relative file paths from this directory. Glob, Grep, Read, Edit, Write, and Bash default to it when no path is given.`
+      : null,
     env?.isGitRepo !== undefined ? [`Is a git repository: ${env.isGitRepo}`] : null,
     env?.additionalWorkingDirectories && env.additionalWorkingDirectories.length > 0
       ? `Additional working directories:`

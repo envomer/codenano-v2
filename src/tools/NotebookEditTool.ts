@@ -8,6 +8,7 @@ import { z } from 'zod'
 import fs from 'fs'
 import path from 'path'
 import { defineTool } from '../tool-builder.js'
+import { resolveToolPath } from '../cwd.js'
 
 const inputSchema = z.object({
   notebook_path: z.string().describe('The absolute path to the Jupyter notebook file (.ipynb)'),
@@ -35,8 +36,8 @@ export const NotebookEditTool = defineTool({
   description: 'Edit, insert, or delete cells in a Jupyter notebook (.ipynb file).',
   input: inputSchema,
 
-  async execute(input) {
-    const filePath = path.resolve(input.notebook_path)
+  async execute(input, context) {
+    const filePath = resolveToolPath(input.notebook_path, context.cwd)
 
     if (!fs.existsSync(filePath)) {
       return { content: `Error: Notebook not found: ${filePath}`, isError: true }

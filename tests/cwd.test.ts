@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { resolveAgentCwd, resolveMemoryDir } from '../src/cwd.js'
+import { resolveAgentCwd, resolveMemoryDir, resolveToolPath } from '../src/cwd.js'
 import { detectEnvironment } from '../src/prompt/sections/environment.js'
 import { getMemoryDir } from '../src/memory/storage.js'
 import { GlobTool } from '../src/tools/GlobTool.js'
@@ -14,7 +14,7 @@ import { BashTool } from '../src/tools/BashTool.js'
 
 describe('resolveAgentCwd', () => {
   it('returns process.cwd() when cwd is not configured', () => {
-    expect(resolveAgentCwd({})).toBe(process.cwd())
+    expect(resolveAgentCwd({})).toBe(realpathSync.native(process.cwd()))
   })
 
   it('resolves relative and absolute cwd paths', () => {
@@ -25,6 +25,16 @@ describe('resolveAgentCwd', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('resolveToolPath', () => {
+  it('resolves relative paths from base cwd', () => {
+    expect(resolveToolPath('src/index.ts', '/project')).toBe('/project/src/index.ts')
+  })
+
+  it('leaves absolute paths unchanged', () => {
+    expect(resolveToolPath('/abs/file.ts', '/project')).toBe('/abs/file.ts')
   })
 })
 

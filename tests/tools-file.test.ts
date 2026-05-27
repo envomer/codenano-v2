@@ -45,6 +45,15 @@ describe('FileReadTool', () => {
     const result = await FileReadTool.execute({ file_path: dir }, ctx)
     expect(result).toEqual({ content: expect.stringContaining('is a directory'), isError: true })
   })
+
+  it('resolves relative paths against context.cwd', async () => {
+    writeFileSync(join(dir, 'rel.txt'), 'relative content')
+    const result = await FileReadTool.execute(
+      { file_path: 'rel.txt' },
+      { ...ctx, cwd: dir },
+    )
+    expect(result).toContain('relative content')
+  })
 })
 
 describe('FileWriteTool', () => {
@@ -74,6 +83,15 @@ describe('FileWriteTool', () => {
     const result = await FileWriteTool.execute({ file_path: fp, content: 'deep' }, ctx)
     expect(result).toContain('created')
     expect(readFileSync(fp, 'utf-8')).toBe('deep')
+  })
+
+  it('resolves relative paths against context.cwd', async () => {
+    const result = await FileWriteTool.execute(
+      { file_path: 'nested/out.txt', content: 'nested write' },
+      { ...ctx, cwd: dir },
+    )
+    expect(result).toContain('created')
+    expect(readFileSync(join(dir, 'nested', 'out.txt'), 'utf-8')).toBe('nested write')
   })
 })
 

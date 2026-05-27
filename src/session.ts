@@ -33,7 +33,7 @@ import {
   type ModelCallResult,
 } from './provider.js'
 import { toPublicEvent } from './events.js'
-import { buildSystemPrompt, buildEffectiveSystemPrompt, detectEnvironment } from './prompt/index.js'
+import { buildSystemPrompt, buildEffectiveSystemPrompt, detectEnvironment, getEnvironmentSection } from './prompt/index.js'
 import { shouldAutoCompact, compactMessages, isPromptTooLongError } from './compact.js'
 import { loadInstructions } from './instructions.js'
 import { applyMessageBudget } from './tool-budget.js'
@@ -148,6 +148,10 @@ export class SessionImpl implements Session {
     })
 
     let prompt = [...effective].filter(Boolean).join('\n\n')
+
+    if (this.config.overrideSystemPrompt || this.config.systemPrompt) {
+      prompt = prompt + '\n\n' + getEnvironmentSection(this.config.model, detectEnvironment(cwd))
+    }
 
     if (this.config.autoLoadInstructions) {
       const instructions = await loadInstructions({ cwd })

@@ -2,7 +2,7 @@
  * cwd.ts — Resolve the agent's primary working directory.
  */
 
-import { resolve } from 'path'
+import { isAbsolute, resolve } from 'path'
 import { realpathSync } from 'fs'
 import type { AgentConfig } from './types.js'
 import { getMemoryDir } from './memory/storage.js'
@@ -15,6 +15,12 @@ export function resolveAgentCwd(config: Pick<AgentConfig, 'cwd'>): string {
   } catch {
     return cwd
   }
+}
+
+/** Resolve a tool path relative to the agent working directory. */
+export function resolveToolPath(filePath: string, baseCwd?: string): string {
+  const base = baseCwd ?? process.cwd()
+  return isAbsolute(filePath) ? resolve(filePath) : resolve(base, filePath)
 }
 
 /** Resolve the effective memory directory for an agent config. */
