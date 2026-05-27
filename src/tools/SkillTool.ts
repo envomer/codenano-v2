@@ -65,6 +65,7 @@ export function createSkillTool(
             tools: parentConfig.tools,
             systemPrompt: expanded,
             maxTurns: 20,
+            cwd: parentConfig.cwd,
           })
 
           const result = await childAgent.ask(input.args ?? 'Execute the skill as described.')

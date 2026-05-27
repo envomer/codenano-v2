@@ -50,8 +50,8 @@ export const GrepTool = defineTool({
   isReadOnly: true,
   isConcurrencySafe: true,
 
-  async execute(input) {
-    const searchPath = input.path ? path.resolve(input.path) : process.cwd()
+  async execute(input, context) {
+    const searchPath = input.path ? path.resolve(input.path) : (context.cwd ?? process.cwd())
     const mode = input.output_mode ?? 'files_with_matches'
     const limit = input.head_limit ?? 250
 

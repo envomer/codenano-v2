@@ -2,7 +2,7 @@
  * Memory storage utilities
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'fs'
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, realpathSync } from 'fs'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { createHash } from 'crypto'
@@ -10,12 +10,19 @@ import type { Memory, MemoryType } from './types.js'
 
 const DEFAULT_MEMORY_BASE = join(homedir(), '.agent-core', 'memory')
 
-export function getMemoryDir(customDir?: string): string {
+export function getMemoryDir(customDir?: string, projectCwd?: string): string {
   if (customDir) {
     return resolve(customDir)
   }
 
-  const projectHash = createHash('md5').update(process.cwd()).digest('hex').slice(0, 8)
+  const cwd = projectCwd ?? process.cwd()
+  let resolvedCwd = cwd
+  try {
+    resolvedCwd = realpathSync.native(cwd)
+  } catch {
+    // keep unresolved path if realpath fails
+  }
+  const projectHash = createHash('md5').update(resolvedCwd).digest('hex').slice(0, 8)
   return join(DEFAULT_MEMORY_BASE, projectHash)
 }
 

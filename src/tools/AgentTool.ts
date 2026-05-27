@@ -75,6 +75,7 @@ export function createAgentTool(parentConfig: AgentConfig): ToolDef<AgentToolInp
         autoCompact: parentConfig.autoCompact,
         toolResultBudget: parentConfig.toolResultBudget,
         streamingToolExecution: parentConfig.streamingToolExecution,
+        cwd: parentConfig.cwd,
       })
 
       try {

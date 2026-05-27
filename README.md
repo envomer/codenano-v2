@@ -47,6 +47,35 @@ console.log(result.text)
 
 **That's it.** No complex setup. No configuration hell. Just pure productivity.
 
+### Working directory
+
+By default, the agent uses `process.cwd()` as its working directory. Set `cwd` to point the agent at a specific project:
+
+```typescript
+const agent = createAgent({
+  model: 'claude-sonnet-4-6',
+  tools: coreTools(),
+  cwd: '/path/to/my-project',  // absolute or relative path
+})
+```
+
+The configured directory is used for:
+
+- **File tools** — Glob, Grep, and Bash default to this path when no explicit path is given
+- **System prompt** — injected as "Primary working directory" in environment context
+- **CLAUDE.md** — project instructions are discovered starting from this directory
+- **Memory** — default memory storage is scoped by a hash of this path (`~/.agent-core/memory/<hash>/`)
+
+```typescript
+// Analyze a repo without changing process.cwd()
+const agent = createAgent({
+  model: 'claude-sonnet-4-6',
+  tools: coreTools(),
+  cwd: './packages/api',
+  autoLoadInstructions: true,
+})
+```
+
 ### Streaming? Built-in.
 
 ```typescript
@@ -120,6 +149,7 @@ Both memory and session persistence have sensible defaults and support custom pa
 
 | Feature | Default Path | Custom Config |
 |---------|-------------|---------------|
+| **Working directory** | `process.cwd()` | `cwd` |
 | **Memory** | `~/.agent-core/memory/<cwd-hash>/` | `memory.memoryDir` |
 | **Session** | `~/.agent-core/sessions/` | `persistence.storageDir` |
 

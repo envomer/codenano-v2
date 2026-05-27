@@ -29,8 +29,8 @@ export const GlobTool = defineTool({
   isReadOnly: true,
   isConcurrencySafe: true,
 
-  async execute(input) {
-    const searchDir = input.path ? path.resolve(input.path) : process.cwd()
+  async execute(input, context) {
+    const searchDir = input.path ? path.resolve(input.path) : (context.cwd ?? process.cwd())
 
     try {
       // Use find with globbing — cross-platform fallback

@@ -85,12 +85,14 @@ export const BashTool = defineTool({
     return readOnlyPrefixes.some(p => cmd.startsWith(p))
   },
 
-  async execute(input) {
+  async execute(input, context) {
+    const cwd = context.cwd ?? process.cwd()
     const timeout = Math.min(input.timeout ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS)
 
     if (input.run_in_background) {
       return new Promise<string>(resolve => {
         const child = exec(input.command, {
+          cwd,
           timeout,
           maxBuffer: 10 * 1024 * 1024,
           shell: process.env.SHELL || '/bin/bash',
@@ -113,6 +115,7 @@ export const BashTool = defineTool({
     try {
       const result = execSync(input.command, {
         encoding: 'utf-8',
+        cwd,
         timeout,
         maxBuffer: 10 * 1024 * 1024,
         shell: process.env.SHELL || '/bin/bash',

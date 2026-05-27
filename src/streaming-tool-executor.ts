@@ -21,6 +21,7 @@ import type Anthropic from '@anthropic-ai/sdk'
 import type { ToolDef, AgentConfig, ToolContext, ToolOutput, StreamEvent } from './types.js'
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.js'
 import { truncateToolResult } from './tool-budget.js'
+import { resolveAgentCwd } from './cwd.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -226,7 +227,11 @@ export class StreamingToolExecutor {
 
     // Execute
     try {
-      const context: ToolContext = { signal: this.signal, messages: this.messages }
+      const context: ToolContext = {
+        signal: this.signal,
+        messages: this.messages,
+        cwd: resolveAgentCwd(this.config),
+      }
       const rawOutput = await tool.execute(parsed.data, context)
       const output = normalizeToolOutput(rawOutput)
 

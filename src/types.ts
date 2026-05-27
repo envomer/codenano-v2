@@ -14,6 +14,13 @@ export interface AgentConfig {
   /** Claude model to use (e.g. 'claude-sonnet-4-6', 'claude-opus-4-6') */
   model: string
 
+  /**
+   * Primary working directory path for the agent.
+   * Used as the default for file tools, Bash, CLAUDE.md discovery, memory scoping,
+   * and system prompt environment context. Defaults to process.cwd().
+   */
+  cwd?: string
+
   /** Anthropic API key. Defaults to ANTHROPIC_API_KEY env var */
   apiKey?: string
 

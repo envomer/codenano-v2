@@ -10,8 +10,17 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.js'
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js'
 import type { AgentConfig, ToolDef, ToolContext, StreamEvent } from './types.js'
 import { truncateToolResult } from './tool-budget.js'
+import { resolveAgentCwd } from './cwd.js'
 
 const MAX_TOOL_CONCURRENCY = 10
+
+function buildToolContext(
+  config: AgentConfig,
+  signal: AbortSignal,
+  messages: MessageParam[],
+): ToolContext {
+  return { signal, messages, cwd: resolveAgentCwd(config) }
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -143,7 +152,7 @@ export async function executeSingleTool(
 
   // Execute
   try {
-    const context: ToolContext = { signal, messages }
+    const context = buildToolContext(config, signal, messages)
     const rawOutput = await tool.execute(parsed.data, context)
     const output = normalizeToolOutput(rawOutput)
 
@@ -229,7 +238,7 @@ export async function executeBatchConcurrently(
     }
 
     try {
-      const context: ToolContext = { signal, messages }
+      const context = buildToolContext(config, signal, messages)
       const rawOutput = await tool.execute(parsed.data, context)
       const output = normalizeToolOutput(rawOutput)
 

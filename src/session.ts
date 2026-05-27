@@ -46,6 +46,7 @@ import { getMemorySection } from './prompt/sections/memory.js'
 import { appendEntry, loadSession } from './session-storage.js'
 import { buildHookContext, fireNotify, firePreToolUse, firePostToolUse, fireError, fireCompact } from './hooks.js'
 import { CostTracker } from './cost-tracker.js'
+import { resolveAgentCwd, resolveMemoryDir } from './cwd.js'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ export class SessionImpl implements Session {
       this.memoryExtractor = createMemoryExtractor({
         client: this.client,
         model: config.model,
-        memoryDir: config.memory?.memoryDir,
+        memoryDir: resolveMemoryDir(config),
         extractStrategy: strategy,
         extractMaxTurns: config.memory?.extractMaxTurns,
         useForkedAgent: config.memory?.useForkedAgent,
@@ -128,13 +129,15 @@ export class SessionImpl implements Session {
   private async getSystemPrompt(): Promise<string> {
     if (this.resolvedSystemPrompt !== null) return this.resolvedSystemPrompt
 
+    const cwd = resolveAgentCwd(this.config)
+
     const defaultPrompt = await buildSystemPrompt({
       identity: this.config.identity,
       model: this.config.model,
       tools: this.config.tools,
       language: this.config.language,
-      environment: detectEnvironment(),
-      memoryDir: this.config.memory?.autoLoad !== false ? this.config.memory?.memoryDir : undefined,
+      environment: detectEnvironment(cwd),
+      memoryDir: this.config.memory?.autoLoad !== false ? resolveMemoryDir(this.config) : undefined,
     })
 
     const effective = buildEffectiveSystemPrompt({
@@ -147,7 +150,7 @@ export class SessionImpl implements Session {
     let prompt = [...effective].filter(Boolean).join('\n\n')
 
     if (this.config.autoLoadInstructions) {
-      const instructions = await loadInstructions()
+      const instructions = await loadInstructions({ cwd })
       if (instructions) {
         prompt = prompt + '\n\n' + instructions
       }
@@ -155,7 +158,7 @@ export class SessionImpl implements Session {
 
     // Append memory section if autoLoad is enabled
     if (this.config.memory?.autoLoad !== false) {
-      const memoryPrompt = getMemorySection(this.config.memory?.memoryDir)
+      const memoryPrompt = getMemorySection(resolveMemoryDir(this.config))
       if (memoryPrompt) {
         prompt = prompt + '\n\n' + memoryPrompt
       }

@@ -60,6 +60,7 @@ import { createMemoryExtractor } from './memory/index.js'
 import { getMemorySection } from './prompt/sections/memory.js'
 import { buildHookContext, fireNotify, firePreToolUse, firePostToolUse, fireError, fireCompact } from './hooks.js'
 import { CostTracker } from './cost-tracker.js'
+import { resolveAgentCwd, resolveMemoryDir } from './cwd.js'
 
 // ─── Default Configuration ──────────────────────────────────────────────────
 
@@ -131,7 +132,7 @@ class AgentImpl implements Agent {
       this.memoryExtractor = createMemoryExtractor({
         client: this.client,
         model: config.model,
-        memoryDir: config.memory?.memoryDir,
+        memoryDir: resolveMemoryDir(config),
         extractStrategy: strategy,
         extractMaxTurns: config.memory?.extractMaxTurns,
         useForkedAgent: config.memory?.useForkedAgent,
@@ -147,14 +148,16 @@ class AgentImpl implements Agent {
   private async getSystemPrompt(): Promise<string> {
     if (this.resolvedSystemPrompt !== null) return this.resolvedSystemPrompt
 
+    const cwd = resolveAgentCwd(this.config)
+
     // Build the default prompt from sections
     const defaultPrompt = await buildSystemPrompt({
       identity: this.config.identity,
       model: this.config.model,
       tools: this.config.tools,
       language: this.config.language,
-      environment: detectEnvironment(),
-      memoryDir: this.config.memory?.autoLoad !== false ? this.config.memory?.memoryDir : undefined,
+      environment: detectEnvironment(cwd),
+      memoryDir: this.config.memory?.autoLoad !== false ? resolveMemoryDir(this.config) : undefined,
     })
 
     // Apply priority chain
@@ -169,7 +172,7 @@ class AgentImpl implements Agent {
 
     // Auto-load CLAUDE.md project instructions if enabled
     if (this.config.autoLoadInstructions) {
-      const instructions = await loadInstructions()
+      const instructions = await loadInstructions({ cwd })
       if (instructions) {
         prompt = prompt + '\n\n' + instructions
       }
@@ -178,7 +181,7 @@ class AgentImpl implements Agent {
     // Append memory section if autoLoad is enabled
     // This ensures memories are included even when systemPrompt overrides the default
     if (this.config.memory?.autoLoad !== false) {
-      const memoryPrompt = getMemorySection(this.config.memory?.memoryDir)
+      const memoryPrompt = getMemorySection(resolveMemoryDir(this.config))
       if (memoryPrompt) {
         prompt = prompt + '\n\n' + memoryPrompt
       }
