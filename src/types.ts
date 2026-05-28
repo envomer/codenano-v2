@@ -99,6 +99,15 @@ export interface AgentConfig {
   autoCompact?: boolean
 
   /**
+   * Context window size in tokens for the model being used.
+   * Used to calculate the auto-compact threshold.
+   * Defaults to 200_000 (Claude's context window).
+   * Set this when using non-Anthropic models via OpenRouter or other providers
+   * (e.g. 128_000 for GPT-4o, 60_000 for a conservative cross-model default).
+   */
+  contextWindow?: number
+
+  /**
    * Fallback model to use when the primary model is overloaded (529 errors).
    * After 3 consecutive 529 errors, the agent switches to this model.
    *

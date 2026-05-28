@@ -75,17 +75,16 @@ export function estimateTokens(messages: MessageParam[], lastUsage?: Usage): num
 
 // ─── Threshold Calculation ───────────────────────────────────────────────────
 
-function getContextWindow(_model: string): number {
-  // All Claude models (haiku, sonnet, opus) currently have 200k context
-  return DEFAULT_CONTEXT_WINDOW
+function getContextWindow(_model: string, configured?: number): number {
+  return configured ?? DEFAULT_CONTEXT_WINDOW
 }
 
-function getEffectiveContextWindow(model: string, maxOutputTokens = 16384): number {
-  return getContextWindow(model) - Math.min(maxOutputTokens, MAX_OUTPUT_TOKENS_RESERVE)
+function getEffectiveContextWindow(model: string, maxOutputTokens = 16384, configured?: number): number {
+  return getContextWindow(model, configured) - Math.min(maxOutputTokens, MAX_OUTPUT_TOKENS_RESERVE)
 }
 
-function getAutoCompactThreshold(model: string, maxOutputTokens?: number): number {
-  return getEffectiveContextWindow(model, maxOutputTokens) - AUTOCOMPACT_BUFFER_TOKENS
+function getAutoCompactThreshold(model: string, maxOutputTokens?: number, configured?: number): number {
+  return getEffectiveContextWindow(model, maxOutputTokens, configured) - AUTOCOMPACT_BUFFER_TOKENS
 }
 
 /**
@@ -100,7 +99,7 @@ export function shouldAutoCompact(
   if (config.autoCompact === false) return false
 
   const estimated = estimateTokens(messages, lastUsage)
-  const threshold = getAutoCompactThreshold(config.model, config.maxOutputTokens)
+  const threshold = getAutoCompactThreshold(config.model, config.maxOutputTokens, config.contextWindow)
 
   return estimated >= threshold
 }
