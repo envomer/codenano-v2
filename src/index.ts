@@ -29,6 +29,10 @@
 export { createAgent } from './agent.js'
 export { defineTool } from './tool-builder.js'
 
+// ── Agent Loop ─────────────────────────────────────────────────────────────
+export { runLoop, resolveSystemPrompt } from './loop.js'
+export type { LoopOptions } from './loop.js'
+
 // ── Memory ──────────────────────────────────────────────────────────────────
 export { saveMemory, loadMemory, scanMemories, loadMemoryIndex, getMemoryDir } from './memory/index.js'
 export type { Memory, MemoryType, MemoryConfig } from './memory/index.js'

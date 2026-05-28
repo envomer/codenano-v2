@@ -1,62 +1,29 @@
 /**
  * session.ts — Multi-turn session management
  *
- * A Session accumulates conversation history across multiple send() calls,
- * allowing multi-turn interactions with the agent.
- *
- * Phase 1 + Phase 2 + Phase 3 (P1) features (same as agent.ts):
- *   - Tool concurrency, auto-compact, 413 recovery
- *   - Max output recovery, model fallback, tool result budgeting
- *   - Streaming tool executor, max output escalation
+ * A Session accumulates conversation history across multiple send() calls.
+ * All loop logic lives in loop.ts — this file handles session-specific
+ * concerns: message persistence, session ID, and history accumulation.
  */
 
 import Anthropic from '@anthropic-ai/sdk'
-import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.js'
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js'
 import type {
   AgentConfig,
   Session,
   Result,
   StreamEvent,
   ToolDef,
-  Usage,
-  ToolContext,
-  ToolOutput,
   MessageParam as PublicMessageParam,
   QueryTracking,
 } from './types.js'
-import {
-  callModelStreamingWithRetry,
-  mergeConsecutiveUserMessages,
-  FallbackTriggeredError,
-  CAPPED_DEFAULT_MAX_TOKENS,
-  ESCALATED_MAX_TOKENS,
-  type ModelCallResult,
-} from './provider.js'
-import { toPublicEvent } from './events.js'
-import { buildSystemPrompt, buildEffectiveSystemPrompt, detectEnvironment, getEnvironmentSection } from './prompt/index.js'
-import { shouldAutoCompact, compactMessages, isPromptTooLongError } from './compact.js'
-import { loadInstructions } from './instructions.js'
-import { applyMessageBudget } from './tool-budget.js'
-import { StreamingToolExecutor } from './streaming-tool-executor.js'
-import { partitionToolCalls, executeSingleTool, executeBatchConcurrently } from './tool-executor.js'
-import { snipIfNeeded } from './snip-compact.js'
-import { microcompact } from './microcompact.js'
 import { createMemoryExtractor } from './memory/index.js'
-import { getMemorySection } from './prompt/sections/memory.js'
 import { appendEntry, loadSession } from './session-storage.js'
-import { buildHookContext, fireNotify, firePreToolUse, firePostToolUse, fireError, fireCompact } from './hooks.js'
-import { CostTracker } from './cost-tracker.js'
-import { resolveAgentCwd, resolveMemoryDir } from './cwd.js'
+import { buildHookContext, fireNotify } from './hooks.js'
+import { resolveMemoryDir } from './cwd.js'
+import { runLoop, resolveSystemPrompt } from './loop.js'
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const MAX_OUTPUT_RECOVERY_LIMIT = 3
-
-const MAX_OUTPUT_RECOVERY_MESSAGE =
-  'Output token limit hit. Resume directly — no apology, no recap of what you were doing. ' +
-  'Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces.'
-
-// ─── SessionImpl ────────────────────────────────────────────────────────────
+// ─── SessionImpl ─────────────────────────────────────────────────────────────
 
 export class SessionImpl implements Session {
   private config: AgentConfig
@@ -69,7 +36,6 @@ export class SessionImpl implements Session {
   private activeModel: string
   private queryTracking: QueryTracking | null = null
   private stopHookRetryCount = 0
-  private readonly MAX_HOOK_RETRIES = 3
   private memoryExtractor: ReturnType<typeof createMemoryExtractor> | null = null
   private _sessionId: string
 
@@ -85,18 +51,13 @@ export class SessionImpl implements Session {
     this.toolSchemas = toolSchemas
     this.toolMap = toolMap
 
-    // Session persistence: generate or restore session ID
     this._sessionId = config.persistence?.resumeSessionId ?? crypto.randomUUID()
 
     if (config.persistence?.enabled) {
       if (config.persistence.resumeSessionId) {
-        // Resume: load messages from JSONL
         const loaded = loadSession(this._sessionId, config.persistence)
-        if (loaded) {
-          this.messages = loaded.messages
-        }
+        if (loaded) this.messages = loaded.messages
       } else {
-        // New session: write metadata entry
         appendEntry(this._sessionId, {
           type: 'metadata',
           timestamp: new Date().toISOString(),
@@ -109,7 +70,6 @@ export class SessionImpl implements Session {
       }
     }
 
-    // Initialize memory extractor
     const strategy = config.memory?.extractStrategy
     if (strategy && strategy !== 'disabled') {
       this.memoryExtractor = createMemoryExtractor({
@@ -122,63 +82,21 @@ export class SessionImpl implements Session {
       })
     }
 
-    // Fire onSessionStart hook
     fireNotify(config.onSessionStart, buildHookContext(this._sessionId, 0, this.messages))
   }
 
   private async getSystemPrompt(): Promise<string> {
     if (this.resolvedSystemPrompt !== null) return this.resolvedSystemPrompt
-
-    const cwd = resolveAgentCwd(this.config)
-
-    const defaultPrompt = await buildSystemPrompt({
-      identity: this.config.identity,
-      model: this.config.model,
-      tools: this.config.tools,
-      language: this.config.language,
-      environment: detectEnvironment(cwd),
-      memoryDir: this.config.memory?.autoLoad !== false ? resolveMemoryDir(this.config) : undefined,
-    })
-
-    const effective = buildEffectiveSystemPrompt({
-      overridePrompt: this.config.overrideSystemPrompt,
-      customPrompt: this.config.systemPrompt,
-      defaultPrompt: [...defaultPrompt],
-      appendPrompt: this.config.appendSystemPrompt,
-    })
-
-    let prompt = [...effective].filter(Boolean).join('\n\n')
-
-    if (this.config.overrideSystemPrompt || this.config.systemPrompt) {
-      prompt = prompt + '\n\n' + getEnvironmentSection(this.config.model, detectEnvironment(cwd))
-    }
-
-    if (this.config.autoLoadInstructions) {
-      const instructions = await loadInstructions({ cwd })
-      if (instructions) {
-        prompt = prompt + '\n\n' + instructions
-      }
-    }
-
-    // Append memory section if autoLoad is enabled
-    if (this.config.memory?.autoLoad !== false) {
-      const memoryPrompt = getMemorySection(resolveMemoryDir(this.config))
-      if (memoryPrompt) {
-        prompt = prompt + '\n\n' + memoryPrompt
-      }
-    }
-
-    this.resolvedSystemPrompt = prompt
+    this.resolvedSystemPrompt = await resolveSystemPrompt(this.config)
     return this.resolvedSystemPrompt
-  }
-
-  private getActiveConfig(): AgentConfig {
-    if (this.activeModel === this.config.model) return this.config
-    return { ...this.config, model: this.activeModel }
   }
 
   get id(): string {
     return this._sessionId
+  }
+
+  get history(): readonly PublicMessageParam[] {
+    return this.messages.map(m => ({ role: m.role, content: m.content }) as PublicMessageParam)
   }
 
   private persistMessage(msg: MessageParam): void {
@@ -193,13 +111,9 @@ export class SessionImpl implements Session {
   async send(prompt: string): Promise<Result> {
     let result: Result | undefined
     for await (const event of this.runSessionTurn(prompt)) {
-      if (event.type === 'result') {
-        result = event.result
-      }
+      if (event.type === 'result') result = event.result
     }
-    if (!result) {
-      throw new Error('Session turn completed without producing a result')
-    }
+    if (!result) throw new Error('Session turn completed without producing a result')
     return result
   }
 
@@ -212,489 +126,42 @@ export class SessionImpl implements Session {
     this.abortController = new AbortController()
   }
 
-  get history(): readonly PublicMessageParam[] {
-    return this.messages.map(m => ({
-      role: m.role,
-      content: m.content,
-    })) as PublicMessageParam[]
-  }
-
-  // ─── Session Turn ───────────────────────────────────────────────────
+  // ─── Session Turn ─────────────────────────────────────────────────────────
 
   private async *runSessionTurn(prompt: string): AsyncGenerator<StreamEvent, void> {
-    const startTime = Date.now()
-    const maxTurns = this.config.maxTurns ?? 30
-
-    this.messages.push({ role: 'user', content: prompt })
-    this.persistMessage(this.messages[this.messages.length - 1]!)
+    const userMsg: MessageParam = { role: 'user', content: prompt }
+    this.messages.push(userMsg)
+    this.persistMessage(userMsg)
 
     const systemPrompt = await this.getSystemPrompt()
-    let turnCount = 0
-    let lastStopReason = 'end_turn'
-    let hasAttemptedCompact = false
-    let maxOutputRecoveryCount = 0
-    let maxOutputTokensOverride: number | undefined
-    let lastUsage: Usage | undefined
-    const totalUsage: Usage = {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheCreationInputTokens: 0,
-      cacheReadInputTokens: 0,
-    }
-    const costTracker = new CostTracker()
 
-    // Initialize or increment query tracking
-    const queryTracking: QueryTracking = this.queryTracking
-      ? {
-          chainId: this.queryTracking.chainId,
-          depth: this.queryTracking.depth + 1,
-        }
-      : {
-          chainId: crypto.randomUUID(),
-          depth: 0,
-        }
-    this.queryTracking = queryTracking
+    // messagesHolder starts with a reference to this.messages.
+    // If the loop replaces it (on compaction), we sync back after.
+    const messagesHolder = { messages: this.messages }
+    const activeModelRef = { value: this.activeModel }
+    const queryTrackingRef = { value: this.queryTracking }
+    const stopHookRetryCountRef = { value: this.stopHookRetryCount }
 
-    // Emit query_start event
-    yield { type: 'query_start', queryTracking }
+    yield* runLoop({
+      config: this.config,
+      client: this.client,
+      toolSchemas: this.toolSchemas,
+      toolMap: this.toolMap,
+      systemPrompt,
+      messagesHolder,
+      signal: this.abortController.signal,
+      sessionId: this._sessionId,
+      persistMessage: (msg) => this.persistMessage(msg),
+      activeModelRef,
+      queryTrackingRef,
+      stopHookRetryCountRef,
+      memoryExtractor: this.memoryExtractor,
+    })
 
-    const maxRecoveryAttempts = this.config.maxOutputRecoveryAttempts ?? MAX_OUTPUT_RECOVERY_LIMIT
-    const useStreamingExecution = this.config.streamingToolExecution !== false
-    const enableBudget = this.config.toolResultBudget !== false
-    const capEnabled = this.config.maxOutputTokensCap === true
-
-    // Apply initial cap if enabled (8K instead of default 16K)
-    if (capEnabled && !this.config.maxOutputTokens) {
-      maxOutputTokensOverride = CAPPED_DEFAULT_MAX_TOKENS
-    }
-
-    while (turnCount < maxTurns) {
-      turnCount++
-
-      if (this.abortController.signal.aborted) {
-        this.abortController = new AbortController()
-        break
-      }
-
-      yield { type: 'turn_start', turnNumber: turnCount }
-
-      // ── onTurnStart hook ──────────────────────────────────────────
-      await fireNotify(this.config.onTurnStart, buildHookContext(this._sessionId, turnCount, this.messages))
-
-      // ── Snip old messages (fast, zero-cost) ────────────────────────
-      const snipResult = snipIfNeeded(this.messages)
-      if (snipResult.snipped) {
-        this.messages = snipResult.messages
-      }
-
-      // ── Microcompact tool results (fast, zero-cost) ────────────────
-      const microResult = microcompact(this.messages)
-      if (microResult.compressed > 0) {
-        this.messages = microResult.messages
-      }
-
-      // ── Auto-compact check ──────────────────────────────────────────
-      if (this.config.autoCompact !== false && lastUsage) {
-        if (shouldAutoCompact(this.messages, this.config, lastUsage)) {
-          const messagesBefore = this.messages.length
-          const compacted = await compactMessages(
-            this.messages,
-            systemPrompt,
-            this.client,
-            this.config,
-            this.abortController.signal,
-          )
-          if (compacted) {
-            this.messages = compacted
-            hasAttemptedCompact = true
-            await fireCompact(this.config.onCompact, buildHookContext(this._sessionId, turnCount, this.messages), messagesBefore, this.messages.length)
-          }
-        }
-      }
-
-      // ── Call model (with retry + fallback) ─────────────────────────
-      let modelResult: ModelCallResult | undefined
-      let modelError: unknown = null
-      const normalizedMessages = mergeConsecutiveUserMessages(this.messages)
-
-      // Create streaming tool executor for this turn
-      const streamingExecutor =
-        useStreamingExecution && (this.config.tools?.length ?? 0) > 0
-          ? new StreamingToolExecutor(
-              this.toolMap,
-              this.config,
-              this.abortController.signal,
-              this.messages,
-              enableBudget,
-            )
-          : null
-
-      try {
-        for await (const event of callModelStreamingWithRetry(
-          this.client,
-          normalizedMessages,
-          systemPrompt,
-          this.toolSchemas,
-          this.getActiveConfig(),
-          this.abortController.signal,
-          maxOutputTokensOverride,
-        )) {
-          const publicEvent = toPublicEvent(event, turnCount)
-          if (publicEvent) yield publicEvent
-          if (event.type === 'message_complete') modelResult = event.result
-        }
-
-        // Feed completed tool_use blocks to executor
-        if (streamingExecutor && modelResult) {
-          const toolUseBlocks = modelResult.assistantContent.filter(
-            (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
-          )
-          for (const block of toolUseBlocks) {
-            yield {
-              type: 'tool_use',
-              toolName: block.name,
-              toolUseId: block.id,
-              input: block.input,
-            }
-            streamingExecutor.addTool(block)
-          }
-        }
-      } catch (error) {
-        if (streamingExecutor) {
-          for (const result of streamingExecutor.discard()) {
-            // Discard on error
-          }
-        }
-
-        if (error instanceof FallbackTriggeredError && this.config.fallbackModel) {
-          this.activeModel = this.config.fallbackModel
-          yield {
-            type: 'error',
-            error: new Error(
-              `Switched to ${this.config.fallbackModel} due to high demand for ${this.config.model}`,
-            ),
-          }
-          turnCount--
-          continue
-        }
-        modelError = error
-      }
-
-      // ── 413 Recovery ──────────────────────────────────────────────
-      if (modelError && isPromptTooLongError(modelError) && !hasAttemptedCompact) {
-        const compacted = await compactMessages(
-          this.messages,
-          systemPrompt,
-          this.client,
-          this.config,
-          this.abortController.signal,
-        )
-        if (compacted) {
-          this.messages = compacted
-          hasAttemptedCompact = true
-          turnCount--
-          continue
-        }
-        yield {
-          type: 'error',
-          error: modelError instanceof Error ? modelError : new Error(String(modelError)),
-        }
-        break
-      }
-
-      if (modelError) {
-        const err = modelError instanceof Error ? modelError : new Error(String(modelError))
-        await fireError(this.config.onError, buildHookContext(this._sessionId, turnCount, this.messages), err)
-        yield { type: 'error', error: err }
-        break
-      }
-
-      if (!modelResult) {
-        const err = new Error('Model call produced no result')
-        await fireError(this.config.onError, buildHookContext(this._sessionId, turnCount, this.messages), err)
-        yield { type: 'error', error: err }
-        break
-      }
-
-      lastUsage = modelResult.usage
-      totalUsage.inputTokens += modelResult.usage.inputTokens
-      totalUsage.outputTokens += modelResult.usage.outputTokens
-      totalUsage.cacheCreationInputTokens += modelResult.usage.cacheCreationInputTokens
-      totalUsage.cacheReadInputTokens += modelResult.usage.cacheReadInputTokens
-      costTracker.add(this.activeModel, modelResult.usage)
-      lastStopReason = modelResult.stopReason ?? 'end_turn'
-
-      this.messages.push({
-        role: 'assistant',
-        content: modelResult.assistantContent as ContentBlockParam[],
-      })
-      this.persistMessage(this.messages[this.messages.length - 1]!)
-
-      // ── Max Output Escalation + Recovery ───────────────────────────
-      if (lastStopReason === 'max_tokens') {
-        // Path 1: Escalation — retry same messages at 64K
-        // Skip if user explicitly set maxOutputTokens (they don't want auto-escalation)
-        if (
-          capEnabled &&
-          maxOutputTokensOverride !== ESCALATED_MAX_TOKENS &&
-          !this.config.maxOutputTokens
-        ) {
-          maxOutputTokensOverride = ESCALATED_MAX_TOKENS
-          this.messages.pop()
-          turnCount--
-          continue
-        }
-
-        // Path 2: Recovery inject
-        if (maxOutputRecoveryCount < maxRecoveryAttempts) {
-          maxOutputRecoveryCount++
-          if (capEnabled) {
-            maxOutputTokensOverride = undefined
-          }
-          this.messages.push({ role: 'user', content: MAX_OUTPUT_RECOVERY_MESSAGE })
-          this.persistMessage(this.messages[this.messages.length - 1]!)
-          continue
-        }
-      }
-
-      // ── Extract tool_use blocks ────────────────────────────────────
-      const toolUseBlocks = modelResult.assistantContent.filter(
-        (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
-      )
-
-      if (toolUseBlocks.length > 0) {
-        maxOutputRecoveryCount = 0
-        if (capEnabled && !this.config.maxOutputTokens) {
-          maxOutputTokensOverride = CAPPED_DEFAULT_MAX_TOKENS
-        }
-      }
-
-      // ── No tool use → done ─────────────────────────────────────────
-      if (toolUseBlocks.length === 0) {
-        if (this.config.onTurnEnd) {
-          const lastText = extractText(modelResult.assistantContent)
-          const hookResult = await this.config.onTurnEnd({
-            messages: this.messages,
-            lastResponse: lastText,
-          })
-
-          // Handle preventContinuation
-          if (hookResult?.preventContinuation) {
-            this.stopHookRetryCount = 0
-            yield { type: 'turn_end', stopReason: 'stop_hook_prevented', turnNumber: turnCount }
-            yield {
-              type: 'result',
-              result: {
-                text: lastText,
-                messages: this.messages.map(simplifyMessage),
-                usage: totalUsage,
-                stopReason: 'stop_hook_prevented',
-                numTurns: turnCount,
-                durationMs: Date.now() - startTime,
-                costUSD: costTracker.total,
-                queryTracking,
-              },
-            }
-            return
-          }
-
-          // Handle continueWith with retry limit
-          if (hookResult?.continueWith) {
-            if (this.stopHookRetryCount >= this.MAX_HOOK_RETRIES) {
-              console.warn('Stop hook retry limit reached')
-              this.stopHookRetryCount = 0
-              yield { type: 'turn_end', stopReason: 'hook_retry_limit', turnNumber: turnCount }
-              yield {
-                type: 'result',
-                result: {
-                  text: lastText,
-                  messages: this.messages.map(simplifyMessage),
-                  usage: totalUsage,
-                  stopReason: 'hook_retry_limit',
-                  numTurns: turnCount,
-                  durationMs: Date.now() - startTime,
-                  costUSD: costTracker.total,
-                  queryTracking,
-                },
-              }
-              return
-            }
-            this.stopHookRetryCount++
-            this.messages.push({ role: 'user', content: hookResult.continueWith })
-            this.persistMessage(this.messages[this.messages.length - 1]!)
-            continue
-          }
-        }
-
-        // Success - reset counter
-        this.stopHookRetryCount = 0
-
-        // Trigger memory extraction (fire-and-forget)
-        if (this.memoryExtractor) {
-          this.memoryExtractor.triggerExtraction(this.messages)
-        }
-
-        yield { type: 'turn_end', stopReason: lastStopReason, turnNumber: turnCount }
-
-        const finalText = extractText(modelResult.assistantContent)
-        yield {
-          type: 'result',
-          result: {
-            text: finalText,
-            messages: this.messages.map(simplifyMessage),
-            usage: totalUsage,
-            stopReason: lastStopReason,
-            numTurns: turnCount,
-            durationMs: Date.now() - startTime,
-            costUSD: costTracker.total,
-            queryTracking,
-          },
-        }
-        return
-      }
-
-      // ── Execute tools ──────────────────────────────────────────────
-      yield { type: 'turn_end', stopReason: 'tool_use', turnNumber: turnCount }
-
-      const allToolResults: ContentBlockParam[] = []
-      const hookCtx = buildHookContext(this._sessionId, turnCount, this.messages)
-
-      if (streamingExecutor) {
-        for await (const result of streamingExecutor.getRemainingResults()) {
-          allToolResults.push(result.apiResult)
-          yield result.event
-          if (result.event.type === 'tool_result') {
-            await firePostToolUse(this.config, hookCtx, {
-              name: result.event.toolUseId, input: {}, id: result.event.toolUseId,
-              output: result.event.output, isError: result.event.isError,
-            })
-          }
-        }
-      } else {
-        const batches = partitionToolCalls(toolUseBlocks, this.toolMap)
-
-        for (const batch of batches) {
-          if (batch.isConcurrencySafe && batch.blocks.length > 1) {
-            const allowedBlocks: typeof batch.blocks = []
-            for (const toolUse of batch.blocks) {
-              const blockReason = await firePreToolUse(this.config, hookCtx, {
-                name: toolUse.name, input: toolUse.input as Record<string, unknown>, id: toolUse.id,
-              })
-              if (blockReason) {
-                const blockedResult: ContentBlockParam = {
-                  type: 'tool_result', tool_use_id: toolUse.id,
-                  content: `Tool blocked: ${blockReason}`, is_error: true,
-                } as ContentBlockParam
-                allToolResults.push(blockedResult)
-                yield { type: 'tool_result', toolUseId: toolUse.id, output: `Tool blocked: ${blockReason}`, isError: true }
-              } else {
-                allowedBlocks.push(toolUse)
-                const tool = this.toolMap.get(toolUse.name)
-                if (tool) {
-                  const parsed = tool.input.safeParse(toolUse.input)
-                  if (parsed.success) {
-                    yield { type: 'tool_use', toolName: toolUse.name, toolUseId: toolUse.id, input: parsed.data }
-                  }
-                }
-              }
-            }
-
-            if (allowedBlocks.length > 0) {
-              const concurrencyCap = Math.min(allowedBlocks.length, 10)
-              const results = await executeBatchConcurrently(
-                allowedBlocks, this.toolMap, this.config, this.abortController.signal,
-                this.messages, concurrencyCap, enableBudget,
-              )
-              for (const r of results) {
-                allToolResults.push(r.apiResult)
-                yield r.event
-                if (r.event.type === 'tool_result') {
-                  await firePostToolUse(this.config, hookCtx, {
-                    name: r.event.toolUseId, input: {}, id: r.event.toolUseId,
-                    output: r.event.output, isError: r.event.isError,
-                  })
-                }
-              }
-            }
-          } else {
-            for (const toolUse of batch.blocks) {
-              const blockReason = await firePreToolUse(this.config, hookCtx, {
-                name: toolUse.name, input: toolUse.input as Record<string, unknown>, id: toolUse.id,
-              })
-              if (blockReason) {
-                const blockedResult: ContentBlockParam = {
-                  type: 'tool_result', tool_use_id: toolUse.id,
-                  content: `Tool blocked: ${blockReason}`, is_error: true,
-                } as ContentBlockParam
-                allToolResults.push(blockedResult)
-                yield { type: 'tool_result', toolUseId: toolUse.id, output: `Tool blocked: ${blockReason}`, isError: true }
-              } else {
-                const { apiResult, events } = await executeSingleTool(
-                  toolUse, this.toolMap, this.config, this.abortController.signal, this.messages, enableBudget,
-                )
-                for (const evt of events) {
-                  yield evt
-                  if (evt.type === 'tool_result') {
-                    await firePostToolUse(this.config, hookCtx, {
-                      name: toolUse.name, input: toolUse.input as Record<string, unknown>, id: toolUse.id,
-                      output: evt.output, isError: evt.isError,
-                    })
-                  }
-                }
-                allToolResults.push(apiResult)
-              }
-            }
-          }
-        }
-      }
-
-      const budgetedResults = enableBudget ? applyMessageBudget(allToolResults) : allToolResults
-
-      this.messages.push({ role: 'user', content: budgetedResults })
-      this.persistMessage(this.messages[this.messages.length - 1]!)
-    }
-
-    // Max turns reached
-    await fireNotify(this.config.onMaxTurns, buildHookContext(this._sessionId, turnCount, this.messages))
-    const lastText = extractLastAssistantText(this.messages)
-    yield {
-      type: 'result',
-      result: {
-        text: lastText,
-        messages: this.messages.map(simplifyMessage),
-        usage: totalUsage,
-        stopReason: `max_turns (${this.config.maxTurns ?? 30})`,
-        numTurns: turnCount,
-        durationMs: Date.now() - startTime,
-        costUSD: costTracker.total,
-        queryTracking,
-      },
-    }
+    // Sync mutable state back from refs
+    this.messages = messagesHolder.messages
+    this.activeModel = activeModelRef.value
+    this.queryTracking = queryTrackingRef.value
+    this.stopHookRetryCount = stopHookRetryCountRef.value
   }
-}
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function extractText(content: Anthropic.ContentBlock[]): string {
-  return content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map(b => b.text)
-    .join('')
-}
-
-function extractLastAssistantText(messages: MessageParam[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]!
-    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-      return msg.content
-        .filter((b: any) => b.type === 'text')
-        .map((b: any) => b.text)
-        .join('')
-    }
-  }
-  return ''
-}
-
-function simplifyMessage(msg: MessageParam): PublicMessageParam {
-  return { role: msg.role, content: msg.content } as PublicMessageParam
 }
