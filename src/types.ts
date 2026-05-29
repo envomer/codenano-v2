@@ -421,4 +421,13 @@ export interface Session {
 
   /** Get conversation history */
   readonly history: readonly MessageParam[]
+
+  /**
+   * Remove specific tool calls and their results from conversation history.
+   * Pass the toolUseIds of Read calls that were exploratory (file was read but
+   * never subsequently edited). Both the tool_use block in the assistant message
+   * and the matching tool_result block in the user message are stripped.
+   * Messages that become empty after stripping are removed entirely.
+   */
+  evictToolResults(toolUseIds: string[]): void
 }

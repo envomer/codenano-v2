@@ -126,6 +126,35 @@ export class SessionImpl implements Session {
     this.abortController = new AbortController()
   }
 
+  evictToolResults(toolUseIds: string[]): void {
+    if (toolUseIds.length === 0) return
+    const ids = new Set(toolUseIds)
+
+    this.messages = this.messages
+      .map((msg) => {
+        if (!Array.isArray(msg.content)) return msg
+
+        if (msg.role === 'assistant') {
+          const content = msg.content.filter(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (b: any) => !(b.type === 'tool_use' && ids.has(b.id)),
+          )
+          return content.length === 0 ? null : { ...msg, content }
+        }
+
+        if (msg.role === 'user') {
+          const content = msg.content.filter(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (b: any) => !(b.type === 'tool_result' && ids.has(b.tool_use_id)),
+          )
+          return content.length === 0 ? null : { ...msg, content }
+        }
+
+        return msg
+      })
+      .filter((m): m is (typeof this.messages)[number] => m !== null)
+  }
+
   // ─── Session Turn ─────────────────────────────────────────────────────────
 
   private async *runSessionTurn(prompt: string): AsyncGenerator<StreamEvent, void> {
