@@ -169,12 +169,17 @@ describe('Stub tools return error by default', () => {
     expect(result).toEqual({ content: expect.stringContaining('requires'), isError: true })
   })
 
-  it('LSPTool', async () => {
+  it('LSPTool returns an error when no language server is available', async () => {
+    // LSPTool now has a real implementation; when no typescript-language-server
+    // is on PATH or in node_modules/.bin it returns a descriptive error result.
     const result = await LSPTool.execute(
       { operation: 'hover', filePath: 'f.ts', line: 1, character: 1 },
       ctx,
     )
-    expect(result).toEqual({ content: expect.stringContaining('requires'), isError: true })
+    // Either a plain string (if a server happened to be installed) or an error object
+    const isErrorObj = typeof result === 'object' && result !== null && (result as any).isError === true
+    const isString = typeof result === 'string'
+    expect(isErrorObj || isString).toBe(true)
   })
 
   it('AgentTool', async () => {

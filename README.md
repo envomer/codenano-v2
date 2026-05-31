@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/codenano.svg)](https://www.npmjs.com/package/codenano)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-374%20passing-brightgreen.svg)](https://github.com/Adamlixi/codenano)
+[![Tests](https://img.shields.io/badge/tests-424%20passing-brightgreen.svg)](https://github.com/Adamlixi/codenano)
 
 **The lightweight AI coding agent SDK inspired by production agent architecture.**
 
@@ -286,6 +286,52 @@ context: inline
 Review PR #$pr_number. Focus on bugs and security.
 ```
 
+### LSP code intelligence? Built-in.
+
+Use the `LSPTool` to give your agent real code navigation — no grep, no AST parsing:
+
+```typescript
+import { createAgent, extendedTools, LSPTool } from 'codenano'
+
+const agent = createAgent({
+  model: 'claude-sonnet-4-6',
+  tools: [...extendedTools(), LSPTool],
+  cwd: '/path/to/my-project',
+})
+
+// The agent can now call LSP operations autonomously, e.g.:
+// LSP({ operation: 'goToDefinition', filePath: 'src/api.ts', line: 42, character: 15 })
+// LSP({ operation: 'findReferences', filePath: 'src/types.ts', line: 8, character: 10 })
+// LSP({ operation: 'hover', filePath: 'src/server.ts', line: 20, character: 5 })
+```
+
+**Operations:** `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`.
+
+**Auto-detection:** looks for `typescript-language-server` in the project's `node_modules/.bin/` first, then falls back to the global PATH. Returns a clear error if no server is found — no crash.
+
+```bash
+# Install the TypeScript language server if needed
+npm install -g typescript-language-server typescript
+```
+
+### Token savings? Automatic.
+
+Every agent turn runs two zero-cost compression passes before calling the model:
+
+- **Microcompact** — tool results over 10 KB are truncated to a prefix + suffix, keeping the relevant edges without bloating the context
+- **Snip-compact** — when conversation history exceeds 50 messages, old middle messages are dropped (keeping the head for initial context and the tail for recent work)
+
+These run automatically — no configuration needed. For finer control, evict specific tool results after a turn:
+
+```typescript
+const session = agent.session()
+const result = await session.send('Explore the codebase')
+
+// Remove exploration reads that were never edited — they cost tokens on every
+// subsequent turn but the model doesn't need them anymore
+session.evictToolResults(['tool-use-id-1', 'tool-use-id-2'])
+```
+
 ### MCP protocol? Supported.
 
 Connect to any MCP server and use its tools:
@@ -334,7 +380,7 @@ const agent = createAgent({
 |---------|----------|---------------|-----------|
 | **Philosophy** | Inspired by production AI coding systems | General-purpose AI SDK | General agent framework |
 | **Lines of Code** | ~8,000 (focused) | ~15,000+ | 100,000+ |
-| **What's Included** | Agent engine + 17 tools | Multi-model + streaming | Everything + kitchen sink |
+| **What's Included** | Agent engine + 18 tools | Multi-model + streaming | Everything + kitchen sink |
 | **Setup Time** | < 1 minute | < 1 minute | 10+ minutes |
 | **Use Case** | Build coding agents | Build any AI app | Build complex workflows |
 | **Production Hardening** | ✅ Full (compaction, recovery, budgeting) | ⚠️ Basic | ⚠️ Basic |
@@ -351,22 +397,27 @@ const agent = createAgent({
 
 ## What You Get
 
-### 🛠️ **17 Built-in Tools**
+### 🛠️ **18 Built-in Tools**
 Ready to use, zero configuration:
 - **File Operations:** Read, Edit, Write
 - **Code Search:** Glob (pattern matching), Grep (regex search)
 - **Execution:** Bash commands
-- **Advanced:** Web search, web fetch, notebooks, LSP, and more
+- **Code Intelligence:** LSP (go-to-definition, find-references, hover, symbols, call hierarchy)
+- **Advanced:** Web search, web fetch, notebooks, and more
 
 ### 🎨 **Three Tool Presets**
 ```typescript
 coreTools()      // Essential 6 tools
 extendedTools()  // Core + 5 more
-allTools()       // All 17 tools
+allTools()       // All 18 tools
 ```
 
 ### 🔧 **Production Features**
 - ✅ Auto-compact (handles context overflow)
+- ✅ Microcompact (in-place truncation of oversized tool results, zero LLM cost)
+- ✅ Snip-compact (drops old middle messages when history exceeds 50 messages, zero LLM cost)
+- ✅ Context eviction (`session.evictToolResults()` — strip exploration reads from history)
+- ✅ LSP code intelligence (go-to-definition, find-references, hover, symbols, call hierarchy)
 - ✅ Retry & fallback (resilient API calls)
 - ✅ Token budgeting (cost control)
 - ✅ Permission system (security)
@@ -393,17 +444,19 @@ codenano/
     cost-tracker.ts    # Token-based cost tracking
     git.ts             # Git state detection
     context-analysis.ts # Tool classification & context analysis
-    tools/             # 17 built-in tools + createAgentTool
+    microcompact.ts    # In-place tool result truncation (zero LLM cost)
+    snip-compact.ts    # History trimming for long conversations (zero LLM cost)
+    tools/             # 18 built-in tools + createAgentTool (incl. LSP)
     prompt/            # System prompt builder
     memory/            # Persistent memory system
     provider.ts        # Anthropic SDK + Bedrock
     compact.ts         # Auto-compact logic
-  tests/               # 374 tests
+  tests/               # 424+ tests
   examples/            # Ready-to-run demos
   docs/                # Comprehensive guides
 ```
 
-**374 tests. 100% production-ready.**
+**424+ tests. 100% production-ready.**
 
 ---
 
@@ -423,7 +476,7 @@ codenano/
 ## Testing
 
 ```bash
-# Unit tests (374 tests)
+# Unit tests (424+)
 npm test
 
 # With coverage
@@ -450,6 +503,9 @@ ANTHROPIC_API_KEY=sk-xxx npm run test:integration
 - [x] Sub-agent spawning (createAgentTool)
 - [x] Context collapse (tool classification, context analysis)
 - [x] MCP protocol support (stdio/SSE/HTTP transports)
+- [x] LSP code intelligence (real Node.js client, 9 operations, auto-detects typescript-language-server)
+- [x] Microcompact + snip-compact (zero-cost token savings on every turn)
+- [x] Context eviction API (`session.evictToolResults()` on the public `Session` interface)
 
 **Roadmap complete!**
 
