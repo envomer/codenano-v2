@@ -12,6 +12,7 @@ import {
   buildToolResultMessage,
   mergeConsecutiveUserMessages,
 } from '../src/provider.js'
+import { extendedTools } from '../src/tools/index.js'
 
 // ─── toolDefsToAPISchemas ──────────────────────────────────────────────────
 
@@ -115,6 +116,18 @@ describe('toolDefsToAPISchemas', () => {
     const modeSchema = (schemas[0]!.input_schema as any).properties.mode
 
     expect(modeSchema.enum).toEqual(['fast', 'slow', 'auto'])
+  })
+
+  it('HashEdit schema has no top-level oneOf/anyOf/allOf (Bedrock-compatible)', () => {
+    const schemas = toolDefsToAPISchemas(extendedTools())
+    const hashEdit = schemas.find(s => s.name === 'HashEdit')
+    expect(hashEdit).toBeDefined()
+    const schema = hashEdit!.input_schema as Record<string, unknown>
+    expect(schema.type).toBe('object')
+    expect(schema.oneOf).toBeUndefined()
+    expect(schema.anyOf).toBeUndefined()
+    expect(schema.allOf).toBeUndefined()
+    expect((schema.properties as Record<string, unknown>).operation).toBeDefined()
   })
 })
 

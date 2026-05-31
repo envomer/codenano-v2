@@ -61,52 +61,86 @@ export function computeFileHash(text: string): string {
 }
 
 // ─── Edit types ───────────────────────────────────────────────────────────────
+// Flat object schema (no z.union) — Bedrock / some OpenRouter backends reject
+// oneOf/anyOf/allOf at the top level of tool input_schema.
 
-const replaceSchema = z.object({
-  type: z.literal('replace'),
-  start_line: z.number().int().positive().describe('First line to replace (1-based, inclusive)'),
-  end_line: z.number().int().positive().describe('Last line to replace (1-based, inclusive)'),
-  content: z.string().describe('New content to put in place of the replaced lines'),
-})
+const EDIT_TYPES = [
+  'replace',
+  'delete',
+  'insert_before',
+  'insert_after',
+  'insert_head',
+  'insert_tail',
+] as const
 
-const deleteSchema = z.object({
-  type: z.literal('delete'),
-  start_line: z.number().int().positive().describe('First line to delete (1-based, inclusive)'),
-  end_line: z.number().int().positive().describe('Last line to delete (1-based, inclusive)'),
-})
+const editSchema = z
+  .object({
+    type: z.enum(EDIT_TYPES).describe('Edit operation type'),
+    start_line: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('First line to replace or delete (1-based, inclusive)'),
+    end_line: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Last line to replace or delete (1-based, inclusive)'),
+    line: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Line number for insert_before / insert_after (1-based)'),
+    content: z
+      .string()
+      .optional()
+      .describe('New or inserted content (not used for delete)'),
+  })
+  .superRefine((edit, ctx) => {
+    const req = (field: 'start_line' | 'end_line' | 'line' | 'content') => {
+      ctx.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `${field} is required for edit type "${edit.type}"`,
+      })
+    }
+    switch (edit.type) {
+      case 'replace':
+        if (edit.start_line == null) req('start_line')
+        if (edit.end_line == null) req('end_line')
+        if (edit.content == null) req('content')
+        break
+      case 'delete':
+        if (edit.start_line == null) req('start_line')
+        if (edit.end_line == null) req('end_line')
+        break
+      case 'insert_before':
+      case 'insert_after':
+        if (edit.line == null) req('line')
+        if (edit.content == null) req('content')
+        break
+      case 'insert_head':
+      case 'insert_tail':
+        if (edit.content == null) req('content')
+        break
+    }
+  })
 
-const insertBeforeSchema = z.object({
-  type: z.literal('insert_before'),
-  line: z.number().int().positive().describe('Insert new content before this line number (1-based)'),
-  content: z.string().describe('Content to insert'),
-})
+type Edit =
+  | { type: 'replace'; start_line: number; end_line: number; content: string }
+  | { type: 'delete'; start_line: number; end_line: number }
+  | { type: 'insert_before'; line: number; content: string }
+  | { type: 'insert_after'; line: number; content: string }
+  | { type: 'insert_head'; content: string }
+  | { type: 'insert_tail'; content: string }
 
-const insertAfterSchema = z.object({
-  type: z.literal('insert_after'),
-  line: z.number().int().positive().describe('Insert new content after this line number (1-based)'),
-  content: z.string().describe('Content to insert'),
-})
-
-const insertHeadSchema = z.object({
-  type: z.literal('insert_head'),
-  content: z.string().describe('Content to prepend at the top of the file'),
-})
-
-const insertTailSchema = z.object({
-  type: z.literal('insert_tail'),
-  content: z.string().describe('Content to append at the bottom of the file'),
-})
-
-const editSchema = z.union([
-  replaceSchema,
-  deleteSchema,
-  insertBeforeSchema,
-  insertAfterSchema,
-  insertHeadSchema,
-  insertTailSchema,
-])
-
-type Edit = z.infer<typeof editSchema>
+/** Parsed edit rows are validated by superRefine; narrow for applyEdits. */
+function asValidatedEdits(edits: z.infer<typeof editSchema>[]): Edit[] {
+  return edits as Edit[]
+}
 
 // ─── Edit application ─────────────────────────────────────────────────────────
 
@@ -186,24 +220,42 @@ function formatRead(filePath: string, content: string, hash: string): string {
 
 // ─── Tool schema ──────────────────────────────────────────────────────────────
 
-const inputSchema = z.union([
-  z.object({
-    operation: z.literal('read').describe('Read a file and return its content with line numbers and a hash tag'),
-    file_path: z.string().describe('Path to the file to read'),
-  }),
-  z.object({
-    operation: z.literal('edit').describe('Apply line-based edits to a file, validated against its hash'),
-    file_path: z.string().describe('Path to the file to edit'),
+const inputSchema = z
+  .object({
+    operation: z
+      .enum(['read', 'edit'])
+      .describe(
+        'read: return numbered lines + hash tag; edit: apply line-based edits validated against hash',
+      ),
+    file_path: z.string().describe('Path to the file to read or edit'),
     hash: z
       .string()
       .regex(/^[0-9A-Fa-f]{4}$/)
-      .describe('4-hex hash tag returned by the last `read` of this file — protects against stale edits'),
+      .optional()
+      .describe(
+        'Required for edit — 4-hex hash tag from the last read of this file (stale-edit guard)',
+      ),
     edits: z
       .array(editSchema)
       .min(1)
-      .describe('One or more edits to apply. All line numbers refer to the original file (as read). Apply multiple edits in a single call rather than calling edit repeatedly.'),
-  }),
-])
+      .optional()
+      .describe(
+        'Required for edit — one or more line-based edits (original line numbers from read)',
+      ),
+  })
+  .superRefine((input, ctx) => {
+    if (input.operation !== 'edit') return
+    if (!input.hash) {
+      ctx.addIssue({ code: 'custom', path: ['hash'], message: 'hash is required when operation is edit' })
+    }
+    if (!input.edits?.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['edits'],
+        message: 'edits is required when operation is edit',
+      })
+    }
+  })
 
 export type HashEditInput = z.infer<typeof inputSchema>
 
@@ -254,6 +306,10 @@ Batch all edits for a file into one call — the tool applies them correctly reg
     }
 
     // edit
+    if (!input.hash || !input.edits?.length) {
+      return { content: 'edit requires hash and edits', isError: true }
+    }
+
     const currentHash = computeFileHash(text)
     if (currentHash.toUpperCase() !== input.hash.toUpperCase()) {
       return {
@@ -270,7 +326,7 @@ Batch all edits for a file into one call — the tool applies them correctly reg
 
     let updated: string
     try {
-      updated = applyEdits(text, input.edits)
+      updated = applyEdits(text, asValidatedEdits(input.edits))
     } catch (err) {
       return {
         content: `Failed to apply edits: ${err instanceof Error ? err.message : String(err)}`,
