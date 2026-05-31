@@ -28,6 +28,9 @@ export type { FileReadInput } from './FileReadTool.js'
 export { FileEditTool } from './FileEditTool.js'
 export type { FileEditInput } from './FileEditTool.js'
 
+export { HashEditTool, computeFileHash, applyEdits } from './HashEditTool.js'
+export type { HashEditInput } from './HashEditTool.js'
+
 export { FileWriteTool } from './FileWriteTool.js'
 export type { FileWriteInput } from './FileWriteTool.js'
 
@@ -91,6 +94,7 @@ export type { SkillInput } from './SkillTool.js'
 
 import { FileReadTool } from './FileReadTool.js'
 import { FileEditTool } from './FileEditTool.js'
+import { HashEditTool } from './HashEditTool.js'
 import { FileWriteTool } from './FileWriteTool.js'
 import { GlobTool } from './GlobTool.js'
 import { GrepTool } from './GrepTool.js'
@@ -128,6 +132,7 @@ export function coreTools(): ToolDef<any>[] {
 export function extendedTools(): ToolDef<any>[] {
   return [
     ...coreTools(),
+    HashEditTool,
     NotebookEditTool,
     WebFetchTool,
     BriefTool,

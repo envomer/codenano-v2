@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/codenano.svg)](https://www.npmjs.com/package/codenano)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-424%20passing-brightgreen.svg)](https://github.com/Adamlixi/codenano)
+[![Tests](https://img.shields.io/badge/tests-458%20passing-brightgreen.svg)](https://github.com/Adamlixi/codenano)
 
 **The lightweight AI coding agent SDK inspired by production agent architecture.**
 
@@ -286,6 +286,48 @@ context: inline
 Review PR #$pr_number. Focus on bugs and security.
 ```
 
+### Hash-anchored editing? Built-in.
+
+`HashEditTool` solves two problems with the standard `old_string`/`new_string` Edit tool:
+
+1. **Token cost** — the model must repeat potentially large `old_string` content verbatim
+2. **Stale edits** — if the file changed between the model reading it and writing an edit, the wrong content gets replaced silently
+
+`HashEdit` uses a 4-hex content hash tag as an anchor. Edits are line-based, not string-match-based:
+
+```typescript
+import { createAgent, extendedTools, HashEditTool } from 'codenano'
+
+const agent = createAgent({
+  model: 'claude-sonnet-4-6',
+  tools: [...extendedTools(), HashEditTool],
+})
+
+// The agent's workflow (driven autonomously):
+//
+// 1. Read the file → get hash + numbered lines
+//    HashEdit({ operation: "read", file_path: "src/api.ts" })
+//    → "api.ts  #3A2F\n  1  import ...\n  2  ..."
+//
+// 2. Apply edits referencing the hash — if the file changed, the edit is rejected
+//    HashEdit({
+//      operation: "edit",
+//      file_path: "src/api.ts",
+//      hash: "3A2F",
+//      edits: [
+//        { type: "replace", start_line: 12, end_line: 14, content: "new content" },
+//        { type: "insert_after", line: 20, content: "// added" },
+//        { type: "delete", start_line: 30, end_line: 32 },
+//      ]
+//    })
+```
+
+**Edit types:** `replace`, `delete`, `insert_before`, `insert_after`, `insert_head`, `insert_tail`
+
+**Hash mismatch:** returns a clear error with the current hash so the model can re-read and retry — the file is never written on mismatch.
+
+**Trailing newlines:** preserved exactly — files that end with `\n` keep it after edits.
+
 ### LSP code intelligence? Built-in.
 
 Use the `LSPTool` to give your agent real code navigation — no grep, no AST parsing:
@@ -380,7 +422,7 @@ const agent = createAgent({
 |---------|----------|---------------|-----------|
 | **Philosophy** | Inspired by production AI coding systems | General-purpose AI SDK | General agent framework |
 | **Lines of Code** | ~8,000 (focused) | ~15,000+ | 100,000+ |
-| **What's Included** | Agent engine + 18 tools | Multi-model + streaming | Everything + kitchen sink |
+| **What's Included** | Agent engine + 19 tools | Multi-model + streaming | Everything + kitchen sink |
 | **Setup Time** | < 1 minute | < 1 minute | 10+ minutes |
 | **Use Case** | Build coding agents | Build any AI app | Build complex workflows |
 | **Production Hardening** | ✅ Full (compaction, recovery, budgeting) | ⚠️ Basic | ⚠️ Basic |
@@ -397,19 +439,20 @@ const agent = createAgent({
 
 ## What You Get
 
-### 🛠️ **18 Built-in Tools**
+### 🛠️ **19 Built-in Tools**
 Ready to use, zero configuration:
 - **File Operations:** Read, Edit, Write
 - **Code Search:** Glob (pattern matching), Grep (regex search)
 - **Execution:** Bash commands
 - **Code Intelligence:** LSP (go-to-definition, find-references, hover, symbols, call hierarchy)
+- **Hash-anchored editing:** HashEdit (line-based edits with stale-guard, fewer output tokens)
 - **Advanced:** Web search, web fetch, notebooks, and more
 
 ### 🎨 **Three Tool Presets**
 ```typescript
 coreTools()      // Essential 6 tools
 extendedTools()  // Core + 5 more
-allTools()       // All 18 tools
+allTools()       // All 19 tools
 ```
 
 ### 🔧 **Production Features**
@@ -446,17 +489,17 @@ codenano/
     context-analysis.ts # Tool classification & context analysis
     microcompact.ts    # In-place tool result truncation (zero LLM cost)
     snip-compact.ts    # History trimming for long conversations (zero LLM cost)
-    tools/             # 18 built-in tools + createAgentTool (incl. LSP)
+    tools/             # 19 built-in tools + createAgentTool (incl. LSP, HashEdit)
     prompt/            # System prompt builder
     memory/            # Persistent memory system
     provider.ts        # Anthropic SDK + Bedrock
     compact.ts         # Auto-compact logic
-  tests/               # 424+ tests
+  tests/               # 458+ tests
   examples/            # Ready-to-run demos
   docs/                # Comprehensive guides
 ```
 
-**424+ tests. 100% production-ready.**
+**458+ tests. 100% production-ready.**
 
 ---
 
@@ -476,7 +519,7 @@ codenano/
 ## Testing
 
 ```bash
-# Unit tests (424+)
+# Unit tests (458+)
 npm test
 
 # With coverage
@@ -504,6 +547,7 @@ ANTHROPIC_API_KEY=sk-xxx npm run test:integration
 - [x] Context collapse (tool classification, context analysis)
 - [x] MCP protocol support (stdio/SSE/HTTP transports)
 - [x] LSP code intelligence (real Node.js client, 9 operations, auto-detects typescript-language-server)
+- [x] HashEdit tool (line-anchored edits, content hash stale-guard, token-efficient, 6 edit types)
 - [x] Microcompact + snip-compact (zero-cost token savings on every turn)
 - [x] Context eviction API (`session.evictToolResults()` on the public `Session` interface)
 
