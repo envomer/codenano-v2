@@ -133,7 +133,7 @@ describe('Integration Scenarios', () => {
     setTimeout(() => agent.abort(), 10)
 
     const result = await promise
-    expect(result.stopReason).toContain('turn')
+    expect(result.stopReason).toBe('aborted_tools')
   })
 
   it('handles max_tokens with escalation', async () => {

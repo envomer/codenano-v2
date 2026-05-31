@@ -733,3 +733,69 @@ describe('Prompt system integration', () => {
     expect(systemPromptArg).toContain('security auditor')
   })
 })
+
+describe('abort reasons', () => {
+  const slowTool = defineTool({
+    name: 'slow',
+    description: 'slow tool',
+    input: z.object({}),
+    execute: async () => {
+      await new Promise(resolve => setTimeout(resolve, 200))
+      return 'done'
+    },
+  })
+
+  function messageTexts(messages: { content: unknown }[]): string[] {
+    return messages.flatMap(m => {
+      if (typeof m.content === 'string') return [m.content]
+      if (!Array.isArray(m.content)) return []
+      return m.content.map((b: { content?: string; text?: string }) => b.content ?? b.text ?? '')
+    })
+  }
+
+  it('user abort injects interruption message during tool execution', async () => {
+    mockCallModelStreaming.mockImplementationOnce(async function* () {
+      yield* makeMockEvents([{ type: 'tool_use', id: 'tool_1', name: 'slow', input: {} }])
+    })
+
+    const agent = createAgent({ model: 'test', apiKey: 'test', tools: [slowTool] })
+    const promise = agent.ask('go')
+    setTimeout(() => agent.abort(), 10)
+
+    const result = await promise
+    expect(result.stopReason).toBe('aborted_tools')
+    expect(messageTexts(result.messages).some(t => t.includes('interrupted by user'))).toBe(true)
+  })
+
+  it('graceful abort (interrupt) skips user interruption messages', async () => {
+    mockCallModelStreaming.mockImplementationOnce(async function* () {
+      yield* makeMockEvents([{ type: 'tool_use', id: 'tool_1', name: 'slow', input: {} }])
+    })
+
+    const agent = createAgent({ model: 'test', apiKey: 'test', tools: [slowTool] })
+    const promise = agent.ask('go')
+    setTimeout(() => agent.abort('interrupt'), 10)
+
+    const result = await promise
+    expect(result.stopReason).toBe('aborted_tools_graceful')
+    expect(messageTexts(result.messages).some(t => t.includes('interrupted by user'))).toBe(
+      false,
+    )
+  })
+
+  it('graceful abort after model with pending tool_use closes orphans without user cancel', async () => {
+    mockCallModelStreaming.mockImplementationOnce(async function* () {
+      yield* makeMockEvents([{ type: 'tool_use', id: 'tool_1', name: 'slow', input: {} }])
+    })
+
+    const agent = createAgent({ model: 'test', apiKey: 'test', tools: [slowTool] })
+    const promise = agent.ask('go')
+    setTimeout(() => agent.abort('interrupt'), 0)
+
+    const result = await promise
+    expect(result.stopReason).toMatch(/aborted_(streaming|tools)_graceful/)
+    expect(messageTexts(result.messages).some(t => t.includes('interrupted by user'))).toBe(
+      false,
+    )
+  })
+})

@@ -10,6 +10,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js'
 import type {
   AgentConfig,
+  AgentAbortReason,
   Session,
   Result,
   StreamEvent,
@@ -121,8 +122,12 @@ export class SessionImpl implements Session {
     return this.runSessionTurn(prompt)
   }
 
-  abort(): void {
-    this.abortController.abort()
+  abort(reason?: AgentAbortReason): void {
+    if (reason === 'interrupt') {
+      this.abortController.abort('interrupt')
+    } else {
+      this.abortController.abort()
+    }
     this.abortController = new AbortController()
   }
 

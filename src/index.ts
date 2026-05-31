@@ -31,6 +31,8 @@ export { defineTool } from './tool-builder.js'
 
 // ── Agent Loop ─────────────────────────────────────────────────────────────
 export { runLoop, resolveSystemPrompt } from './loop.js'
+export { isGracefulAbort } from './abort.js'
+export type { AgentAbortReason } from './types.js'
 export type { LoopOptions } from './loop.js'
 
 // ── Memory ──────────────────────────────────────────────────────────────────

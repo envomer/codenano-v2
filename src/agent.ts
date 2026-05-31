@@ -10,6 +10,7 @@ import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js'
 import type {
   AgentConfig,
   Agent,
+  AgentAbortReason,
   Result,
   StreamEvent,
   ToolDef,
@@ -121,8 +122,12 @@ class AgentImpl implements Agent {
     return new SessionImpl(config, this.client, this.toolSchemas, this.toolMap)
   }
 
-  abort(): void {
-    this.abortController.abort()
+  abort(reason?: AgentAbortReason): void {
+    if (reason === 'interrupt') {
+      this.abortController.abort('interrupt')
+    } else {
+      this.abortController.abort()
+    }
     this.abortController = new AbortController()
   }
 

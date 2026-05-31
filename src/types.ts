@@ -7,6 +7,12 @@
 
 import type { ZodType } from 'zod'
 
+/**
+ * Reason for Agent.abort() / Session.abort().
+ * `'interrupt'` — graceful stop (e.g. PlanTaskDone); not treated as user cancel.
+ */
+export type AgentAbortReason = 'interrupt'
+
 // ─── Agent Configuration ────────────────────────────────────────────────────
 
 /** Configuration for creating an Agent */
@@ -401,8 +407,12 @@ export interface Agent {
   /** Create a multi-turn session with persistent history, or resume by ID */
   session(sessionId?: string): Session
 
-  /** Abort the current operation */
-  abort(): void
+  /**
+   * Abort the current operation.
+   * @param reason `'interrupt'` for graceful completion (e.g. PlanTaskDone) — does not
+   *   inject user-interruption messages. Omit for user cancellation.
+   */
+  abort(reason?: AgentAbortReason): void
 }
 
 /** A multi-turn conversation session */
@@ -416,8 +426,11 @@ export interface Session {
   /** Send a message with streaming events */
   stream(prompt: string): AsyncIterable<StreamEvent>
 
-  /** Abort the current operation */
-  abort(): void
+  /**
+   * Abort the current operation.
+   * @param reason `'interrupt'` for graceful completion — see {@link Agent.abort}.
+   */
+  abort(reason?: AgentAbortReason): void
 
   /** Get conversation history */
   readonly history: readonly MessageParam[]

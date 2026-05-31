@@ -58,6 +58,12 @@ import {
 } from './hooks.js'
 import { CostTracker } from './cost-tracker.js'
 import { resolveAgentCwd, resolveMemoryDir } from './cwd.js'
+import {
+  appendUserInterruptionMessage,
+  abortStopReason,
+  buildOrphanedToolResults,
+  isGracefulAbort,
+} from './abort.js'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -207,7 +213,20 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<StreamEvent, v
   while (turnCount < maxTurns) {
     turnCount++
 
-    if (signal.aborted) break
+    if (signal.aborted) {
+      yield* finishAbortedLoop({
+        signal,
+        phase: 'turn',
+        turnCount,
+        messagesHolder,
+        persistMessage,
+        totalUsage,
+        startTime,
+        costTracker,
+        queryTracking,
+      })
+      return
+    }
 
     // ── Turn start ────────────────────────────────────────────────────────
     yield { type: 'turn_start', turnNumber: turnCount }
@@ -268,6 +287,22 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<StreamEvent, v
         if (event.type === 'message_complete') modelResult = event.result
       }
     } catch (error) {
+      if (signal.aborted) {
+        yield* finishAbortedLoop({
+          signal,
+          phase: 'streaming',
+          turnCount,
+          messagesHolder,
+          persistMessage,
+          totalUsage,
+          startTime,
+          costTracker,
+          queryTracking,
+          streamingExecutor,
+        })
+        return
+      }
+
       if (streamingExecutor) {
         for (const _ of streamingExecutor.discard()) { /* cancel in-flight tools */ }
       }
@@ -309,6 +344,21 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<StreamEvent, v
     }
 
     if (!modelResult) {
+      if (signal.aborted) {
+        yield* finishAbortedLoop({
+          signal,
+          phase: 'streaming',
+          turnCount,
+          messagesHolder,
+          persistMessage,
+          totalUsage,
+          startTime,
+          costTracker,
+          queryTracking,
+          streamingExecutor,
+        })
+        return
+      }
       const err = new Error('Model call produced no result')
       await fireError(config.onError, buildHookContext(sessionId, turnCount, messagesHolder.messages), err)
       yield { type: 'error', error: err }
@@ -330,6 +380,24 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<StreamEvent, v
     }
     messagesHolder.messages.push(assistantMsg)
     persistMessage?.(assistantMsg)
+
+    if (signal.aborted) {
+      yield* finishAbortedLoop({
+        signal,
+        phase: 'streaming',
+        turnCount,
+        messagesHolder,
+        persistMessage,
+        totalUsage,
+        startTime,
+        costTracker,
+        queryTracking,
+        assistantContent: modelResult.assistantContent,
+        streamingExecutor,
+        lastText: extractText(modelResult.assistantContent),
+      })
+      return
+    }
 
     // ── Max output token escalation + recovery ────────────────────────────
     if (lastStopReason === 'max_tokens') {
@@ -437,6 +505,23 @@ export async function* runLoop(opts: LoopOptions): AsyncGenerator<StreamEvent, v
     const toolResultMsg: MessageParam = { role: 'user', content: budgetedResults }
     messagesHolder.messages.push(toolResultMsg)
     persistMessage?.(toolResultMsg)
+
+    if (signal.aborted) {
+      yield* finishAbortedLoop({
+        signal,
+        phase: 'tools',
+        turnCount,
+        messagesHolder,
+        persistMessage,
+        totalUsage,
+        startTime,
+        costTracker,
+        queryTracking,
+        duringToolExecution: true,
+        lastText: extractText(modelResult.assistantContent),
+      })
+      return
+    }
   }
 
   // Max turns reached
@@ -616,6 +701,96 @@ async function* executeBatchPath(
   }
 
   return allToolResults
+}
+
+// ─── Abort handling ───────────────────────────────────────────────────────────
+
+interface FinishAbortedOptions {
+  signal: AbortSignal
+  phase: 'streaming' | 'tools' | 'turn'
+  turnCount: number
+  messagesHolder: { messages: MessageParam[] }
+  persistMessage?: (msg: MessageParam) => void
+  assistantContent?: Anthropic.ContentBlock[]
+  streamingExecutor?: StreamingToolExecutor | null
+  duringToolExecution?: boolean
+  totalUsage: Usage
+  startTime: number
+  costTracker: CostTracker
+  queryTracking: QueryTracking
+  lastText?: string
+}
+
+async function* finishAbortedLoop(
+  opts: FinishAbortedOptions,
+): AsyncGenerator<StreamEvent, void> {
+  const {
+    signal,
+    phase,
+    turnCount,
+    messagesHolder,
+    persistMessage,
+    assistantContent,
+    streamingExecutor,
+    duringToolExecution,
+    totalUsage,
+    startTime,
+    costTracker,
+    queryTracking,
+    lastText,
+  } = opts
+
+  const orphanResults: ContentBlockParam[] = []
+
+  if (streamingExecutor) {
+    for (const discarded of streamingExecutor.discard()) {
+      orphanResults.push(discarded.apiResult)
+    }
+  }
+
+  if (assistantContent?.length) {
+    const fromAssistant = buildOrphanedToolResults(assistantContent, signal)
+    const existingIds = new Set(
+      orphanResults
+        .filter((b): b is { type: 'tool_result'; tool_use_id: string } => b.type === 'tool_result')
+        .map(b => b.tool_use_id),
+    )
+    for (const block of fromAssistant) {
+      if (block.type === 'tool_result' && !existingIds.has(block.tool_use_id)) {
+        orphanResults.push(block)
+      }
+    }
+  }
+
+  if (orphanResults.length > 0) {
+    const toolResultMsg: MessageParam = { role: 'user', content: orphanResults }
+    messagesHolder.messages.push(toolResultMsg)
+    persistMessage?.(toolResultMsg)
+  }
+
+  if (!isGracefulAbort(signal)) {
+    const interruptMsg = appendUserInterruptionMessage(
+      messagesHolder.messages,
+      duringToolExecution ?? false,
+    )
+    persistMessage?.(interruptMsg)
+  }
+
+  const stopReason = abortStopReason(signal, phase)
+  yield { type: 'turn_end', stopReason, turnNumber: turnCount }
+  yield {
+    type: 'result',
+    result: buildResult(
+      lastText ?? extractLastAssistantText(messagesHolder.messages),
+      messagesHolder.messages,
+      totalUsage,
+      stopReason,
+      turnCount,
+      startTime,
+      costTracker,
+      queryTracking,
+    ),
+  }
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
