@@ -374,6 +374,42 @@ const result = await session.send('Explore the codebase')
 session.evictToolResults(['tool-use-id-1', 'tool-use-id-2'])
 ```
 
+### OpenRouter & custom base URLs? Supported.
+
+Point the agent at any OpenAI-compatible proxy that speaks the Anthropic messages API — OpenRouter, LiteLLM, a corporate gateway, etc.:
+
+```typescript
+const agent = createAgent({
+  model: 'anthropic/claude-sonnet-4-6',  // OpenRouter model name format
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: 'https://openrouter.ai/api/v1',
+
+  // Set this when the provider's context window differs from Claude's 200k default
+  contextWindow: 128_000,
+})
+```
+
+Or use environment variables — no code change needed:
+
+```bash
+ANTHROPIC_BASE_URL=https://openrouter.ai/api/v1 \
+ANTHROPIC_API_KEY=sk-or-... \
+node my-agent.js
+```
+
+The `contextWindow` option controls when auto-compact kicks in (context window − 13K buffer). Set it to the actual limit of the model you're using so compaction triggers at the right time.
+
+```typescript
+// Conservative cross-model default (safe for most 128K models)
+contextWindow: 60_000
+
+// GPT-4o via OpenRouter
+contextWindow: 128_000
+
+// Claude 3.5 Sonnet (default, no need to set)
+contextWindow: 200_000
+```
+
 ### MCP protocol? Supported.
 
 Connect to any MCP server and use its tools:
@@ -492,7 +528,7 @@ codenano/
     tools/             # 19 built-in tools + createAgentTool (incl. LSP, HashEdit)
     prompt/            # System prompt builder
     memory/            # Persistent memory system
-    provider.ts        # Anthropic SDK + Bedrock
+    provider.ts        # Anthropic SDK + Bedrock + custom base URL (OpenRouter, proxies)
     compact.ts         # Auto-compact logic
   tests/               # 458+ tests
   examples/            # Ready-to-run demos
